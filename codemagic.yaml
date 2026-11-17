@@ -40,7 +40,20 @@ workflows:
           set -euo pipefail
           git submodule update --init --recursive --jobs 8
           GG_PATCHES_ONLY=1 bash build-system/GGBuild.sh
-          printf '\nbuild --//Telegram:disableProvisioningProfiles=true\nbuild --define=apple.codesign=skip\n' >> .bazelrc
+          # rules_apple embeds profiles unconditionally even with signing disabled.
+          # Scope the adjustment to this unsigned AltStore workflow checkout.
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          path = Path('build-system/bazel-rules/rules_apple/apple/internal/ios_rules.bzl')
+          source = path.read_text()
+          pattern = r'(    if platform_prerequisites.platform.is_device)(:\n        processor_partials.append\(\n            partials.provisioning_profile_partial\()'
+          source, count = re.subn(pattern, r'\1 and "disable_legacy_signing" not in ctx.features\2', source)
+          if count != 6:
+              raise SystemExit(f'Unexpected rules_apple layout: {count} profile embedding blocks; expected 6.')
+          path.write_text(source)
+          PY
+          printf '\nbuild --//Telegram:disableProvisioningProfiles=true\nbuild --features=disable_legacy_signing\n' >> .bazelrc
       - name: Build unsigned device IPA
         script: |
           set -euo pipefail
@@ -58,3 +71,4 @@ workflows:
     artifacts:
       - build-output/ipa/Ghostgram-AltStore.ipa
       - build-output/build.log
+
