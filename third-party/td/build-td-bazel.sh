@@ -9,12 +9,19 @@ SOURCE_DIR="$2"
 BUILD_DIR=$(echo "$(cd "$(dirname "$3")"; pwd -P)/$(basename "$3")")
 OPENSSL_DIR="$4"
 
+# Bazel runs genrules with PATH=/bin:/usr/bin:/usr/local/bin, which lacks /usr/sbin (sysctl).
+export PATH="$PATH:/usr/sbin:/sbin"
+NCPU=$(sysctl -n hw.ncpu 2>/dev/null || echo 4)
+
 openssl_crypto_library="${OPENSSL_DIR}/lib/libcrypto.a"
 options=""
 options="$options -DOPENSSL_FOUND=1"
 options="$options -DOPENSSL_CRYPTO_LIBRARY=${openssl_crypto_library}"
 options="$options -DOPENSSL_INCLUDE_DIR=${OPENSSL_DIR}/src/include"
 options="$options -DCMAKE_BUILD_TYPE=Release"
+# TDLib's find_program(CCACHE_FOUND ccache) can find Homebrew's ccache outside PATH and then
+# launch it by bare name, which fails under the genrule PATH (Error 127). Never use ccache here.
+options="$options -DCCACHE_FOUND=OFF"
 options="$options -DIOS_DEPLOYMENT_TARGET=13.0"
 
 cd "$BUILD_DIR"
@@ -22,8 +29,8 @@ cd "$BUILD_DIR"
 # Generate source files
 mkdir native-build
 cd native-build
-cmake -DTD_GENERATE_SOURCE_FILES=ON ../td
-cmake --build . -- -j$(sysctl -n hw.ncpu)
+cmake -DTD_GENERATE_SOURCE_FILES=ON -DCCACHE_FOUND=OFF ../td
+cmake --build . -- -j$NCPU
 cd ..
 
 if [ "$ARCH" = "arm64" ]; then
@@ -54,4 +61,4 @@ echo "set(CMAKE_SYSTEM_PROCESSOR aarch64)" >> toolchain.cmake
 echo "set(CMAKE_C_COMPILER $(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang)" >> toolchain.cmake
 
 cmake -G"Unix Makefiles" -DCMAKE_TOOLCHAIN_FILE=toolchain.cmake -DCMAKE_OSX_SYSROOT=${IOS_SYSROOT[0]} ../td $options
-make tde2e -j$(sysctl -n hw.ncpu)
+make tde2e -j$NCPU
