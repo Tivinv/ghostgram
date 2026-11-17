@@ -124,6 +124,30 @@ workflows:
           test -s build-output/ipa/Telegram.ipa
           mv build-output/ipa/Telegram.ipa build-output/ipa/Ghostgram-AltStore.ipa
           unzip -tq build-output/ipa/Ghostgram-AltStore.ipa
+          # The IPA is unsigned, so it carries no entitlements and AltStore registers no app
+          # group: Telegram then has no group container and launch stops on a black screen.
+          # Ad-hoc sign it with the app group so AltStore/SideStore create and grant it.
+          SIGN_DIR="$(mktemp -d)"
+          unzip -q build-output/ipa/Ghostgram-AltStore.ipa -d "$SIGN_DIR"
+          APP="$(ls -d "$SIGN_DIR"/Payload/*.app | head -1)"
+          BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")"
+          cat > "$SIGN_DIR/app.entitlements" <<ENT
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+          <key>com.apple.security.application-groups</key><array><string>group.$BUNDLE_ID</string></array>
+          </dict></plist>
+          ENT
+          # Innermost code first: frameworks and dylibs, then extensions, then the app.
+          find "$APP" -depth \( -name '*.framework' -o -name '*.dylib' \) -exec codesign -f -s - {} \;
+          for appex in "$APP"/PlugIns/*.appex; do
+            [ -d "$appex" ] && codesign -f -s - --entitlements "$SIGN_DIR/app.entitlements" "$appex"
+          done
+          codesign -f -s - --entitlements "$SIGN_DIR/app.entitlements" "$APP"
+          codesign -d --entitlements - "$APP"
+          rm build-output/ipa/Ghostgram-AltStore.ipa
+          (cd "$SIGN_DIR" && zip -qry "$OLDPWD/build-output/ipa/Ghostgram-AltStore.ipa" Payload)
+          unzip -tq build-output/ipa/Ghostgram-AltStore.ipa
           # A free Apple ID registers at most 10 App IDs per 7 days, and every extension
           # needs its own. This copy has only the app itself: 1 App ID.
           python3 - <<'PY2'

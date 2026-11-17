@@ -574,8 +574,18 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
         try! PasscodeEnvironment.shared.configure(PasscodeConfiguration(appGroupIdentifier: appGroupName, processRole: .mainApp, biometricKeychainService: walletBiometricKeychainService), privateAccessGroup: {
             BuildConfig.keychainAccessGroup(baseAppBundleId: baseAppBundleId)
         })
-        let maybeAppGroupUrl = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupName)
-        
+        var maybeAppGroupUrl = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupName)
+        // GHOST: a sideloaded build (AltStore/SideStore re-signing) can come without the app group
+        // entitlement, and then there is no group container: launch stopped at "Error 2" over a black
+        // window. Keep the data in the app's own container instead; extensions cannot share it, which
+        // such installs strip anyway. A properly signed build always has the group, so it is unaffected.
+        if maybeAppGroupUrl == nil, let libraryUrl = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first {
+            let fallbackUrl = libraryUrl.appendingPathComponent("GhostgramAppGroupFallback", isDirectory: true)
+            if (try? FileManager.default.createDirectory(at: fallbackUrl, withIntermediateDirectories: true, attributes: nil)) != nil {
+                maybeAppGroupUrl = fallbackUrl
+            }
+        }
+
         let buildConfig = BuildConfig(baseAppBundleId: baseAppBundleId)
         self.buildConfig = buildConfig
         let signatureDict = BuildConfigExtra.signatureDict()
