@@ -35,6 +35,16 @@ workflows:
           with open('build-system/ghostgram-configuration.json', 'w') as f:
               json.dump(config, f)
           PY
+      - name: Install Metal Toolchain
+        script: |
+          set -euo pipefail
+          # Since Xcode 26 the Metal compiler is a separate download, and the
+          # Codemagic image does not ship it: MetalCompile (CameraNeo.metal) fails with
+          # "cannot execute tool 'metal' due to missing Metal Toolchain".
+          if ! xcrun metal --version >/dev/null 2>&1; then
+            xcodebuild -downloadComponent MetalToolchain
+          fi
+          xcrun metal --version
       - name: Initialize submodules and project patches
         script: |
           set -euo pipefail
