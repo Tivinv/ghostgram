@@ -58,6 +58,32 @@ workflows:
             echo "Metal Toolchain not usable yet (attempt $attempt), waiting..."
             sleep 10
           done
+          # Fallback: xcrun may not adopt a downloaded toolchain whose build differs from
+          # Xcode's. Mount the downloaded image and copy its tools into Xcode's default
+          # toolchain, which is where Bazel's "env - xcrun metal" looks.
+          echo "Installing Metal tools into XcodeDefault.xctoolchain from the downloaded image"
+          DEFAULT_TC="$DEV_DIR/Toolchains/XcodeDefault.xctoolchain"
+          for dmg in /System/Library/AssetsV2/com_apple_MobileAsset_MetalToolchain/*/AssetData/Restore/*.dmg; do
+            [ -f "$dmg" ] || continue
+            MNT="$(mktemp -d)"
+            hdiutil attach -nobrowse -readonly -mountpoint "$MNT" "$dmg" || continue
+            METAL_TC="$(find "$MNT" -maxdepth 6 -type d -name 'Metal.xctoolchain' -print -quit)"
+            if [ -z "$METAL_TC" ]; then
+              METAL_BIN="$(find "$MNT" -maxdepth 8 -type f -path '*/usr/bin/metal' -print -quit)"
+              [ -n "$METAL_BIN" ] && METAL_TC="$(dirname "$(dirname "$(dirname "$METAL_BIN")")")"
+            fi
+            echo "Metal toolchain in image: ${METAL_TC:-not found}"
+            find "$MNT" -maxdepth 4 | head -40
+            if [ -n "$METAL_TC" ] && [ -d "$METAL_TC/usr" ]; then
+              # Add what the default toolchain lacks, then force the metal* tools over its stubs.
+              sudo rsync -a --ignore-existing "$METAL_TC/usr/" "$DEFAULT_TC/usr/"
+              for tool in "$METAL_TC"/usr/bin/metal*; do
+                sudo cp -f "$tool" "$DEFAULT_TC/usr/bin/"
+              done
+            fi
+            break
+          done
+          if metal_ok; then echo "Metal Toolchain usable after manual install"; exit 0; fi
           echo "WARNING: metal still fails; diagnostics follow, the build will try anyway."
           echo "DEVELOPER_DIR=$DEV_DIR"; xcodebuild -version
           xcodebuild -showComponent MetalToolchain || true
