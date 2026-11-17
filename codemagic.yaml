@@ -1,0 +1,60 @@
+# Prepared for Ghostgram 2a6b08272b7da893f88986846022bafd0727df89.
+# First cloud build still required; this workflow has not been run on macOS.
+workflows:
+  ghostgram-altstore:
+    name: Ghostgram IPA for AltStore
+    instance_type: mac_mini_m2
+    max_build_duration: 120
+    environment:
+      xcode: latest
+      groups:
+        - ghostgram
+    cache:
+      cache_paths:
+        - ~/telegram-bazel-cache
+    scripts:
+      - name: Check Xcode and API credentials
+        script: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, re, subprocess
+          required = json.load(open('versions.json'))['xcode']
+          actual = subprocess.check_output(['xcodebuild', '-version'], text=True)
+          print(actual)
+          version = re.search(r'Xcode (\S+)', actual).group(1)
+          def parts(v): return tuple(map(int, v.split('.')))
+          if parts(version) < parts(required):
+              raise SystemExit(f'Ghostgram requires Xcode {required} or newer; choose a suitable Codemagic image.')
+          api_id = os.environ.get('TELEGRAM_API_ID', '')
+          api_hash = os.environ.get('TELEGRAM_API_HASH', '')
+          if not api_id.isdigit() or not re.fullmatch(r'[0-9a-fA-F]{32}', api_hash):
+              raise SystemExit('Set TELEGRAM_API_ID and TELEGRAM_API_HASH in the ghostgram environment group.')
+          config = json.load(open('build-system/ghostgram-configuration.example.json'))
+          config.update(api_id=api_id, api_hash=api_hash, team_id='AAAAAAAAAA')
+          # Placeholder team: no Apple signing is performed here. AltStore re-signs the IPA.
+          with open('build-system/ghostgram-configuration.json', 'w') as f:
+              json.dump(config, f)
+          PY
+      - name: Initialize submodules and project patches
+        script: |
+          set -euo pipefail
+          git submodule update --init --recursive --jobs 8
+          GG_PATCHES_ONLY=1 bash build-system/GGBuild.sh
+          printf '\nbuild --//Telegram:disableProvisioningProfiles=true\nbuild --define=apple.codesign=skip\n' >> .bazelrc
+      - name: Build unsigned device IPA
+        script: |
+          set -euo pipefail
+          mkdir -p build-output/ipa
+          python3 build-system/Make/Make.py --overrideXcodeVersion \
+            --cacheDir "$HOME/telegram-bazel-cache" build \
+            --configurationPath build-system/ghostgram-configuration.json \
+            --xcodeManagedCodesigning \
+            --buildNumber="${BUILD_NUMBER:-1}" --configuration=release_arm64 \
+            --outputBuildArtifactsPath build-output/ipa \
+            2>&1 | tee build-output/build.log
+          test -s build-output/ipa/Telegram.ipa
+          mv build-output/ipa/Telegram.ipa build-output/ipa/Ghostgram-AltStore.ipa
+          unzip -tq build-output/ipa/Ghostgram-AltStore.ipa
+    artifacts:
+      - build-output/ipa/Ghostgram-AltStore.ipa
+      - build-output/build.log
