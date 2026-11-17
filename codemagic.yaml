@@ -41,8 +41,25 @@ workflows:
           # Since Xcode 26 the Metal compiler is a separate download, and the
           # Codemagic image does not ship it: MetalCompile (CameraNeo.metal) fails with
           # "cannot execute tool 'metal' due to missing Metal Toolchain".
-          if ! xcrun metal --version >/dev/null 2>&1; then
-            xcodebuild -downloadComponent MetalToolchain
+          # A plain download can finish ("Done downloading") and still leave the toolchain
+          # unregistered, so export the bundle and import it explicitly, then wait for it.
+          metal_ok() { xcrun metal --version >/dev/null 2>&1; }
+          if ! metal_ok; then
+            EXPORT_DIR="$(mktemp -d)"
+            xcodebuild -downloadComponent MetalToolchain -exportPath "$EXPORT_DIR"
+            for bundle in "$EXPORT_DIR"/*.exportedBundle; do
+              xcodebuild -importComponent metalToolchain -importPath "$bundle"
+            done
+            for attempt in 1 2 3 4 5 6; do
+              metal_ok && break
+              echo "Metal Toolchain not usable yet (attempt $attempt), waiting..."
+              sleep 10
+            done
+          fi
+          if ! metal_ok; then
+            xcodebuild -showComponent MetalToolchain || true
+            xcode-select -p
+            xcrun metal --version
           fi
           xcrun metal --version
       - name: Initialize submodules and project patches
