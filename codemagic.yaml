@@ -37,31 +37,34 @@ workflows:
           PY
       - name: Install Metal Toolchain
         script: |
-          set -euo pipefail
-          # Since Xcode 26 the Metal compiler is a separate download, and the
-          # Codemagic image does not ship it: MetalCompile (CameraNeo.metal) fails with
+          set -uo pipefail
+          # Since Xcode 26 the Metal compiler is a separate download that the Codemagic
+          # image may lack: MetalCompile (CameraNeo.metal) then fails with
           # "cannot execute tool 'metal' due to missing Metal Toolchain".
-          # A plain download can finish ("Done downloading") and still leave the toolchain
-          # unregistered, so export the bundle and import it explicitly, then wait for it.
-          metal_ok() { xcrun metal --version >/dev/null 2>&1; }
-          if ! metal_ok; then
-            EXPORT_DIR="$(mktemp -d)"
-            xcodebuild -downloadComponent MetalToolchain -exportPath "$EXPORT_DIR"
-            for bundle in "$EXPORT_DIR"/*.exportedBundle; do
-              xcodebuild -importComponent metalToolchain -importPath "$bundle"
-            done
-            for attempt in 1 2 3 4 5 6; do
-              metal_ok && break
-              echo "Metal Toolchain not usable yet (attempt $attempt), waiting..."
-              sleep 10
-            done
-          fi
-          if ! metal_ok; then
-            xcodebuild -showComponent MetalToolchain || true
-            xcode-select -p
-            xcrun metal --version
-          fi
-          xcrun metal --version
+          # Test with a real compile in the environment Bazel uses (env -, DEVELOPER_DIR).
+          DEV_DIR="$(xcode-select -p)"
+          SHADER_DIR="$(mktemp -d)"
+          printf 'kernel void k(device float *a [[buffer(0)]]) { a[0] = 1.0; }\n' > "$SHADER_DIR/t.metal"
+          metal_ok() {
+            env - PATH=/bin:/usr/bin:/usr/local/bin DEVELOPER_DIR="$DEV_DIR" \
+              /usr/bin/xcrun metal -c -target air64-apple-ios15.0 -o "$SHADER_DIR/t.air" "$SHADER_DIR/t.metal"
+          }
+          if metal_ok; then echo "Metal Toolchain already usable"; exit 0; fi
+          # Downloading installs the asset. Never fail the step here: an "Asset is already
+          # installed" answer is success, and the Bazel build is the final judge.
+          xcodebuild -downloadComponent MetalToolchain || true
+          for attempt in 1 2 3 4 5 6; do
+            if metal_ok; then echo "Metal Toolchain usable"; exit 0; fi
+            echo "Metal Toolchain not usable yet (attempt $attempt), waiting..."
+            sleep 10
+          done
+          echo "WARNING: metal still fails; diagnostics follow, the build will try anyway."
+          echo "DEVELOPER_DIR=$DEV_DIR"; xcodebuild -version
+          xcodebuild -showComponent MetalToolchain || true
+          xcrun --find metal || true
+          ls -la /System/Library/AssetsV2/com_apple_MobileAsset_MetalToolchain/ 2>&1 || true
+          mount | grep -i -E 'metal|cryptex' || true
+          exit 0
       - name: Initialize submodules and project patches
         script: |
           set -euo pipefail
