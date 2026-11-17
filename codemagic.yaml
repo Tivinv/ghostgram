@@ -124,7 +124,21 @@ workflows:
           test -s build-output/ipa/Telegram.ipa
           mv build-output/ipa/Telegram.ipa build-output/ipa/Ghostgram-AltStore.ipa
           unzip -tq build-output/ipa/Ghostgram-AltStore.ipa
+          # A free Apple ID registers at most 10 App IDs per 7 days, and every extension
+          # needs its own. This copy has only the app itself: 1 App ID.
+          python3 - <<'PY2'
+          import zipfile, re
+          src = 'build-output/ipa/Ghostgram-AltStore.ipa'
+          dst = 'build-output/ipa/Ghostgram-AltStore-NoExtensions.ipa'
+          drop = re.compile(r'^Payload/[^/]+\.app/(PlugIns|Extensions|Watch)/')
+          with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, 'w', zipfile.ZIP_DEFLATED) as zout:
+              for item in zin.infolist():
+                  if not drop.match(item.filename):
+                      zout.writestr(item, zin.read(item.filename))
+          PY2
+          unzip -tq build-output/ipa/Ghostgram-AltStore-NoExtensions.ipa
     artifacts:
       - build-output/ipa/Ghostgram-AltStore.ipa
+      - build-output/ipa/Ghostgram-AltStore-NoExtensions.ipa
       - build-output/build.log
 
